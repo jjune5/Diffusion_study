@@ -18,9 +18,9 @@ KUBIG diffusion study. 두 권의 자료(논문/책)를 묶어 코드 중심으�
 | Riemannian Flow Matching — Chen & Lipman 2023 | [`Flow Matching Guide and Code/03_riemannian_fm`](./Flow%20Matching%20Guide%20and%20Code/03_riemannian_fm) |
 | Image FM 학습 예제 (CIFAR10 / ImageNet) | [`Flow Matching Guide and Code/04_scaling_examples/image`](./Flow%20Matching%20Guide%20and%20Code/04_scaling_examples/image) |
 | Text discrete FM 학습 예제 | [`Flow Matching Guide and Code/04_scaling_examples/text`](./Flow%20Matching%20Guide%20and%20Code/04_scaling_examples/text) |
-| DDPM (Ho et al. 2020) + Score SDE (Song et al. 2021) 통합 입문 | [`The Principles of Diffusion Models/ch02_04_ddpm_score_sde`](./The%20Principles%20of%20Diffusion%20Models/ch02_04_ddpm_score_sde) |
-| Rectified Flow — Liu et al. 2022 | [`The Principles of Diffusion Models/ch05_rectified_flow`](./The%20Principles%20of%20Diffusion%20Models/ch05_rectified_flow) |
-| Consistency / Flow Map — Song et al. 2023, Mean Flow 등 | [`The Principles of Diffusion Models/ch11_flow_map`](./The%20Principles%20of%20Diffusion%20Models/ch11_flow_map) |
+| Flow Matching baseline (§5.2 CFM 학습 + §9 Euler/Heun solver 비교) | [`The Principles of Diffusion Models/ch05_flow_matching_baseline`](./The%20Principles%20of%20Diffusion%20Models/ch05_flow_matching_baseline) |
+| Rectified Flow + Reflow (§5.4) — Liu et al. 2022 | [`The Principles of Diffusion Models/ch05_rectified_flow`](./The%20Principles%20of%20Diffusion%20Models/ch05_rectified_flow) |
+| Consistency / CTM / Mean Flow (§11.2, §11.4, §11.5) | [`The Principles of Diffusion Models/ch11_flow_map`](./The%20Principles%20of%20Diffusion%20Models/ch11_flow_map) |
 
 ## 출처 및 라이선스
 
