@@ -38,14 +38,3 @@
 | [`ch11_flow_map/`](./ch11_flow_map) | `flow_map_tutorial.ipynb` | Ch 11 Fast Generators. Flow Map 기반 few-step generator (Consistency Model 계열) |
 
 > 책 사이트의 *"More notebooks coming soon"* 안내에 따라 추후 Part C(Guidance/Solvers) 와 Part B 나머지 챕터 코드가 추가될 예정입니다.
-
-## Citation
-
-```bibtex
-@article{lai2025principles,
-  title   = {The principles of diffusion models},
-  author  = {Lai, Chieh-Hsin and Song, Yang and Kim, Dongjun and Mitsufuji, Yuki and Ermon, Stefano},
-  journal = {arXiv preprint arXiv:2510.21890},
-  year    = {2025}
-}
-```
