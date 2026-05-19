@@ -1,253 +1,389 @@
-# `flow_matching` 라이브러리 검증 매핑
+# Flow Matching Guide and Code — 챕터별 정리
 
-라이브러리 본체(`flow_matching/` 패키지) 의 모든 `.py` 파일을 직접 읽고 (v1.0.10, 총 27 파일 / 2267 줄), 논문 [arXiv:2412.06264](https://arxiv.org/abs/2412.06264) 의 해당 섹션 및 논문 내 **Code 1–10** 코드 예시와 대조해서 만든 매핑입니다. 추측 X. 모든 항목에 GitHub blob 링크 + 라인 번호 + 논문 § / 식 번호를 붙였습니다.
+논문 [arXiv:2412.06264](https://arxiv.org/abs/2412.06264) 의 각 챕터/절을 짧게 요약하고, [`flow_matching` 라이브러리](https://github.com/facebookresearch/flow_matching) (v1.0.10) 에서 어떻게 구현되어 있는지 한눈에 보기 위한 정리.
 
----
-
-## 0. 라이브러리는 이런 식으로 쓰임
-
-논문은 라이브러리 사용 예제를 **Code 1 ~ Code 10** 으로 직접 인용합니다. 그 매핑이 곧 "어느 챕터를 보면 어느 모듈이 나오는가" 입니다.
-
-| 논문 Code # | 챕터 / 식 | 라이브러리에서 쓰는 것 |
-| --- | --- | --- |
-| Code 1 | §2 Quick tour | 라이브러리 없이 from-scratch (`standalone_flow_matching.ipynb` 와 동일) |
-| Code 2 | §3 Flow models (Midpoint solver) | `ODESolver` , `ModelWrapper` |
-| Code 3 | §3.6 / §3.7 Likelihood | `ODESolver.compute_likelihood` |
-| Code 4 | §4.5 CFM loss | `ProbPath.sample` → `PathSample.dx_t` + MSE |
-| Code 5 | §4.8 Affine paths | `AffineProbPath` + 4 종 scheduler |
-| Code 6 | §4.8.1 X₁-prediction (CM loss) | `AffineProbPath.sample` + `model(x_t, t)` vs `sample.x_1` |
-| Code 7 | §4.8 post-training scheduler change | `ScheduleTransformedModel` |
-| Code 8 | §5.5–5.6 Riemannian (Sphere) | `GeodesicProbPath` + `Sphere` + `RiemannianODESolver` |
-| Code 9 | §7.2 / §7.5 Discrete path | `MixtureDiscreteProbPath` + `DiscretePathSample` |
-| Code 10 | §7.4 / §7.5 DFM end-to-end | `MixturePathGeneralizedKL` + `MixtureDiscreteEulerSolver` |
-
-> 사소한 표기 차이: Code 5 는 `CondOTPath` 로 표기되지만 실제 클래스 이름은 `CondOTProbPath` 입니다 (논문 오타로 추정).
+각 섹션은 **핵심 개념** → **코드** 순서. 라이브러리에 직접 대응되는 코드가 없는 챕터 (§1, §8 일부, §9 등) 는 챕터 요지만 짧게 적고 넘어감.
 
 ---
 
-## 1. `flow_matching/path/` — 확률 경로 (probability paths)
+## §2 Quick tour and key concepts
 
-### `path.py` — 추상 베이스
+**핵심.** FM 의 가장 단순한 형태: source $p$ (예: Gaussian) 와 target $q$ (데이터) 를 잇는 probability path $p_t$ 를 정하고, 그 path 를 generating 하는 velocity field $u_t$ 를 신경망으로 회귀학습. 가장 간단한 path 는 **선형 보간**:
 
-[`ProbPath` (path.py:14)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/path.py#L14)
+$$p_{t|1}(x|x_1) = \mathcal{N}(x \mid t x_1, (1-t)^2 I), \quad X_t = t X_1 + (1-t) X_0$$
 
-- 모든 path 의 추상 클래스. 단 하나의 추상 메서드 `sample(x_0, x_1, t) → PathSample`.
-- **논문 대응:** §4.1–4.2 (Data / Building probability paths) 의 일반 인터페이스.
+**코드.** §2 의 standalone 예제는 라이브러리 없이 PyTorch 만으로 짠 코드 — [`01_continuous_fm/standalone_flow_matching.ipynb`](./01_continuous_fm/standalone_flow_matching.ipynb). 라이브러리로는 같은 내용이 `CondOTProbPath()` + `ODESolver` 한두 줄로 줄어듦 (§4.7 참고).
 
-### `path_sample.py` — 결과 컨테이너
+---
 
-[`PathSample` (path_sample.py:13)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/path_sample.py#L13) — `x_0, x_1, t, x_t, dx_t` 5개 텐서를 들고 다님. `dx_t` 가 곧 조건부 속도 (target velocity) — **§4.5 CFM loss (식 4.23)** 에서 회귀 타깃.
+## §3 Flow models — Euclidean 공간에서의 flow 기초
 
-[`DiscretePathSample` (path_sample.py:37)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/path_sample.py#L37) — discrete 용. `dx_t` 없음 (이산이라 derivative 의미 없음).
+### §3.5 Probability paths and the Continuity Equation
 
-### `affine.py` — 어파인 경로 (continuous, Euclidean)
+**핵심.** Velocity field $u_t$ 가 probability path $p_t$ 를 "generate" 한다는 것은 다음 PDE 를 만족한다는 의미:
 
-[`AffineProbPath` (affine.py:15)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/affine.py#L15) — 핵심 클래스.
+$$\partial_t p_t + \nabla \cdot (p_t u_t) = 0 \quad \text{(continuity equation)}$$
 
-- **`sample()` (affine.py:57)** 구현: `x_t = sigma_t * x_0 + alpha_t * x_1`, `dx_t = d_sigma_t * x_0 + d_alpha_t * x_1`
-- **논문 대응:** **§4.8 Affine conditional flows, 식 (4.50)** `ψ_t(x|x₁) = α_t x₁ + σ_t x`. 동일.
-- **6개 변환 메서드 (affine.py:94–244):** `target_to_velocity`, `velocity_to_target`, `epsilon_to_velocity`, `velocity_to_epsilon`, `epsilon_to_target`, `target_to_epsilon`. 모델을 X₁-prediction / ε-prediction / velocity-prediction 중 어느 걸로 parameterize 했든 서로 변환 가능.
-- **논문 대응:** **§4.8.1 Velocity parameterizations (식 4.54–4.58)**, 그리고 **§10.6 Relation to Other Denoising Models** — diffusion 의 noise prediction / denoiser / v-prediction 등 다른 parametrization 들과의 관계.
+이 식이 모든 후속 챕터의 토대 — "어떻게 정의된 $p_t$ 에 대응하는 $u_t$ 를 찾을까" 가 FM 의 본질.
 
-[`CondOTProbPath` (affine.py:247)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/affine.py#L247) — `AffineProbPath` 의 특수 케이스로 `CondOTScheduler` 만 박아둠.
+**코드.** 라이브러리는 이 PDE 를 직접 다루지 않음. ODE 적분이 자동으로 mass-preserving 이라서 따로 강제 안 함 — `ODESolver` 가 `torchdiffeq.odeint` 위에 얹은 wrapper.
 
-- α_t = t, σ_t = 1 − t (직선 보간).
-- **논문 대응:** **§4.7 Optimal Transport and linear conditional flow, 식 (4.42)** `ψ_t(x) = tπ(x) + (1−t)x`.
+### §3.6 Instantaneous Change of Variables
 
-### `mixture.py` — 이산 경로
+**핵심.** Flow ODE 를 따라가는 동안 log-likelihood 의 변화율:
 
-[`MixtureDiscreteProbPath` (mixture.py:19)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/mixture.py#L19)
+$$\frac{d}{dt} \log p_t(\psi_t(x)) = -\nabla \cdot u_t(\psi_t(x))$$
 
-- 좌표별로 source `X_0` 에 머물 확률 σ_t, target `X_1` 로 점프할 확률 1−σ_t.
-- **`sample()` (mixture.py:68)** 구현: `source_indices = torch.rand(...) < sigma_t; x_t = torch.where(source_indices, x_0, x_1)` — Bernoulli flip.
-- **논문 대응:** **§7.2 Discrete probability paths + §7.5 Factorized paths** (식 7.9–7.11).
-- **`posterior_to_velocity()` (mixture.py:91)** — 모델이 출력한 `p(X_1|X_t)` 로부터 CTMC 속도 `u_t = (d_κ_t / (1 − κ_t)) * (posterior − x_t)` 계산. **논문 §7.4 식 (7.4) + §7.5 식 (7.10)**.
+이걸 $[0,1]$ 에서 적분하면 exact log-likelihood. 고차원에선 divergence 계산이 비싸서 **Hutchinson trace estimator** 로 unbiased 추정:
 
-### `geodesic.py` — 매니폴드 경로
+$$\nabla \cdot u_t(x) = \mathbb{E}_Z[Z^\top \nabla_x u_t(x) Z], \quad Z \sim \mathcal{N}(0, I)$$
 
-[`GeodesicProbPath` (geodesic.py:21)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/geodesic.py#L21)
+**코드.** [`ODESolver.compute_likelihood`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/ode_solver.py#L106) — `exact_divergence=True` 면 좌표별 도함수 다 계산, `False` (기본) 면 Hutchinson 추정량.
 
-- 매니폴드 위에서의 측지선 보간: `X_t = exp_{X_1}(κ_t · log_{X_1}(X_0))`.
-- **논문 대응:** **§5.6 Conditional flows through premetrics** (특히 식 5.15 부근). 측지선이 premetric 가 되는 케이스.
-- **구현 핵심 (geodesic.py:87–96):** `torch.func.jvp` (Jacobian-vector product) 와 `vmap` 으로 `x_t` 와 그 시간 미분 `dx_t` 를 동시에 계산. 매니폴드 미분이 닫힌 식으로 안 나오는 경우에도 자동미분으로 대응 가능하게 한 설계.
+### §3.7 Training flow models with simulation
 
-### `path/__init__.py` 의 public API
+**핵심.** FM 이전의 클래식 방식: maximum likelihood $-\mathbb{E}_{Y \sim q}[\log p_1^\theta(Y)]$ 로 학습. $\log p_1^\theta(Y)$ 자체가 ODE 풀이를 필요로 해서 매 학습 step 마다 ODE 적분 — 매우 비쌈. FM 이 등장한 동기.
+
+**코드.** 노트북 [`01_continuous_fm/2d_cnf_maximum_likelihood.ipynb`](./01_continuous_fm/2d_cnf_maximum_likelihood.ipynb) 가 이 방식을 시연. `ODESolver.compute_likelihood` 를 학습 loop 안에서 직접 호출. FM 방식과 학습 시간 / 결과 비교용.
+
+→ 논문 Code 3 (likelihood 계산 예시).
+
+---
+
+## §4 Flow Matching — 본론 (continuous, Euclidean)
+
+### §4.2 Building probability paths + §4.4 Marginalization Trick
+
+**핵심.** 진짜 marginal velocity $u_t^*$ 는 계산 불가 (모든 데이터 위 marginal 적분 필요). 핵심 trick: marginal velocity = conditional velocity 들의 conditional expectation:
+
+$$u_t^*(x) = \mathbb{E}\big[u_t(X_t \mid X_1) \mid X_t = x\big]$$
+
+이걸 알면 conditional velocity 만 정의해도 학습 가능.
+
+**코드.** 추상 클래스 [`ProbPath` (path/path.py)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/path.py#L14) 의 `sample(x_0, x_1, t)` 메서드가 $(X_0, X_1)$ 쌍 → $X_t$ 와 conditional velocity $\dot X_t = u_t(X_t \mid X_1)$ 한꺼번에 반환:
 
 ```python
-from flow_matching.path import (
-    ProbPath, AffineProbPath, CondOTProbPath,
-    MixtureDiscreteProbPath, GeodesicProbPath,
-    PathSample, DiscretePathSample,
+sample = path.sample(x_0, x_1, t)
+sample.x_t   # X_t
+sample.dx_t  # conditional velocity (CFM 의 회귀 타깃)
+```
+
+### §4.5 Flow Matching loss
+
+**핵심.** Conditional Flow Matching (CFM) loss. Bregman divergence $D$ 로:
+
+$$\mathcal{L}_{\text{CFM}}(\theta) = \mathbb{E}_{t, Z, X_t \sim p_{t|Z}}\, D\big(u_t^\theta(X_t),\; u_t(X_t \mid Z)\big)$$
+
+가장 흔한 $D$ 는 squared L2 (= MSE). 핵심 정리 (Thm. 4): $\nabla \mathcal{L}_{\text{FM}} = \nabla \mathcal{L}_{\text{CFM}}$ 이라 학습 결과는 진짜 marginal velocity 와 일치.
+
+**코드.** 라이브러리는 연속 CFM loss 클래스를 따로 제공 안 함. 사용자 코드에서:
+
+```python
+sample = path.sample(x_0=x_0, x_1=x_1, t=t)
+pred = model(sample.x_t, t)
+loss = ((pred - sample.dx_t) ** 2).mean()  # MSE = squared L2 Bregman
+```
+
+→ 논문 Code 4 가 정확히 이 패턴.
+
+### §4.7 Optimal Transport and linear conditional flow
+
+**핵심.** Conditional flow 의 무한히 많은 선택 중, dynamic OT 의 kinetic energy upper bound 를 minimize 하는 것은 **선형 보간**:
+
+$$\psi_t(x \mid x_1) = (1-t) x + t x_1$$
+
+곧고 짧은 trajectory → ODE solver 가 적은 step (이론상 Euler 1-step) 으로 풀 수 있음.
+
+**코드.**
+
+```python
+from flow_matching.path import CondOTProbPath
+path = CondOTProbPath()
+```
+
+내부적으로 `AffineProbPath(scheduler=CondOTScheduler())` 와 동일한 shorthand. `CondOTScheduler`: $\alpha_t = t$, $\sigma_t = 1-t$.
+
+### §4.8 Affine conditional flows
+
+**핵심.** OT path 의 일반화. affine 보간 한 식에 다양한 schedule 을 다 담음:
+
+$$\psi_t(x \mid x_1) = \alpha_t x_1 + \sigma_t x, \qquad \alpha_0 = \sigma_1 = 0,\; \alpha_1 = \sigma_0 = 1$$
+
+$(\alpha_t, \sigma_t)$ 페어를 **scheduler** 라 부름. OT / VP (DDPM) / cosine 등이 다 이 한 식의 특수 케이스.
+
+**코드.** [`AffineProbPath`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/affine.py#L15) + 5 가지 scheduler:
+
+```python
+from flow_matching.path import AffineProbPath
+from flow_matching.path.scheduler import (
+    CondOTScheduler,           # α = t,  σ = 1 - t
+    PolynomialConvexScheduler, # α = t^n,  σ = 1 - t^n
+    LinearVPScheduler,         # α = t,  σ = sqrt(1 - t^2)
+    VPScheduler,               # variance preserving (DDPM-style)
+    CosineScheduler,           # α = sin(πt/2),  σ = cos(πt/2)
 )
+
+path = AffineProbPath(scheduler=CosineScheduler())
+sample = path.sample(x_0=x_0, x_1=x_1, t=t)
+# sample.x_t  = σ_t * x_0 + α_t * x_1
+# sample.dx_t = σ̇_t * x_0 + α̇_t * x_1
+```
+
+→ 논문 Code 5 가 5종 scheduler 사용 예시를 그대로 나열.
+
+### §4.8.1 Velocity parameterizations
+
+**핵심.** Affine path 에서는 모델이 무엇을 출력하든 다른 형태로 변환 가능. 세 가지 대표적 parametrization:
+
+- **$x_1$-prediction** (denoiser): 깨끗한 sample 예측 (diffusion 의 $\hat x_0$ prediction 과 동치)
+- **$\epsilon$-prediction**: noise 예측 (DDPM 표준)
+- **velocity-prediction**: $\dot x_t$ 를 직접 예측
+
+세 표현은 같은 marginal velocity field 의 다른 parametrization 이라 학습 결과는 같음. Sampling 시점에 필요한 형태로 변환.
+
+**코드.** `AffineProbPath` 의 6 가지 변환 메서드 — 어느 representation 으로 학습했든 다른 representation 으로 즉시 변환:
+
+```python
+path.target_to_velocity(x_1, x_t, t)      # x_1 -> v
+path.velocity_to_target(v, x_t, t)         # v -> x_1
+path.epsilon_to_velocity(eps, x_t, t)      # eps -> v
+path.velocity_to_epsilon(v, x_t, t)        # v -> eps
+path.epsilon_to_target(eps, x_t, t)        # eps -> x_1
+path.target_to_epsilon(x_1, x_t, t)        # x_1 -> eps
+```
+
+→ 논문 Code 6 ($X_1$-prediction 학습 예제, CM loss).
+
+### §4.8 Post-training scheduler change
+
+**핵심.** Scheduler A 로 학습한 모델을 scheduler B 로 sampling 하고 싶을 때. Scale-time (ST) transformation 으로 marginal velocity 를 재해석:
+
+$$\bar u_r(x) = \frac{\dot s_r}{s_r} x + s_r \dot t_r\, u_{t_r}\!\big(x / s_r\big)$$
+
+**코드.** [`ScheduleTransformedModel`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/schedule_transform.py#L13) 가 wrapping:
+
+```python
+from flow_matching.path.scheduler import ScheduleTransformedModel, VPScheduler, CondOTScheduler
+
+transformed = ScheduleTransformedModel(
+    velocity_model=trained_model,
+    original_scheduler=VPScheduler(),     # 학습 시
+    new_scheduler=CondOTScheduler(),       # 샘플 시
+)
+# transformed 를 ODESolver 에 그대로 넘기면 됨
+```
+
+→ 논문 Code 7.
+
+### §4.10 Conditional generation and guidance
+
+**핵심.** Label $y$ 가 있을 때 conditional probability path:
+
+$$p_{t|Y}(x \mid y) = \int p_{t|1}(x \mid x_1)\, q(x_1 \mid y)\, dx_1$$
+
+Classifier-free guidance 등은 guided velocity 와 unconditional velocity 를 sampling 시점에 섞음.
+
+**코드.** 라이브러리는 guidance 를 별도 클래스로 분리하지 않음. `ModelWrapper.forward(x, t, **extras)` 에서 `extras` 로 label 전달. 실제 예제는 [`04_scaling_examples/image/`](./04_scaling_examples/image/) 의 `train.py` (class-conditional UNet + `--cfg_scale` 플래그).
+
+---
+
+## §5 Non-Euclidean Flow Matching
+
+### §5.5 Riemannian CFM loss
+
+**핵심.** Euclidean CFM 과 같은 형태, 단 $D$ 가 manifold tangent space 의 Bregman divergence:
+
+$$\mathcal{L}_{\text{RCFM}}(\theta) = \mathbb{E}\, D_{X_t}\big(u_t^\theta(X_t \mid X_1),\; u_t(X_t)\big)$$
+
+가장 흔한 $D$ 는 그냥 `‖model_out − target‖²` — target 이 tangent vector 라 RD 의 MSE 와 식이 같음.
+
+**코드.** Continuous case 처럼 라이브러리에 loss 클래스 없음. 사용자가 직접:
+
+```python
+loss = ((model(sample.x_t, t) - sample.dx_t) ** 2).sum(dim=-1).mean()
+```
+
+### §5.6 Conditional flows through premetrics (Geodesic)
+
+**핵심.** Manifold 에서 affine 보간 $\alpha x_1 + \sigma x_0$ 는 일반적으로 정의 안 됨 (manifold 안에 안 머무름). 자연스러운 대안 = **geodesic 보간**:
+
+$$\psi_t(x_0 \mid x_1) = \exp_{x_0}\!\big(\kappa(t)\, \log_{x_0}(x_1)\big)$$
+
+$\kappa(0) = 0$, $\kappa(1) = 1$ 인 단조증가 스케줄. Sphere, flat torus 처럼 `exp`/`log` 가 closed form 인 manifold 에서는 simulation-free 학습 가능. 일반 manifold 에서는 premetric $d(\cdot, \cdot)$ 로 일반화 (식 5.18).
+
+**코드.** [`GeodesicProbPath`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/geodesic.py#L21):
+
+```python
+from flow_matching.path import GeodesicProbPath
+from flow_matching.path.scheduler import CondOTScheduler
+from flow_matching.utils.manifolds import Sphere, FlatTorus
+
+manifold = Sphere()             # or FlatTorus()
+path = GeodesicProbPath(scheduler=CondOTScheduler(), manifold=manifold)
+sample = path.sample(x_0=x_0, x_1=x_1, t=t)
+# 내부적으로 torch.func.jvp + vmap 으로 dx_t 도 자동미분
+```
+
+Sampling 은 [`RiemannianODESolver`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/riemannian_ode_solver.py#L25):
+
+```python
+from flow_matching.solver import RiemannianODESolver
+solver = RiemannianODESolver(manifold=manifold, velocity_model=model)
+samples = solver.sample(x_init=x0, step_size=0.01, method="midpoint")
+# 매 step: manifold.proju 로 velocity 를 tangent 에 투영
+#         manifold.projx 로 점을 manifold 에 투영
+```
+
+새 manifold 추가는 [`Manifold`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/manifold.py#L13) 의 4 메서드만 구현 — `expmap`, `logmap`, `projx`, `proju`. `Sphere` 는 45줄, `FlatTorus` 는 28줄.
+
+→ 논문 Code 8 (Sphere 학습 예제).
+
+---
+
+## §6 Continuous Time Markov Chain (CTMC) Models
+
+**핵심.** Flow 가 ODE 로 정의되듯, 이산 상태공간 $\mathcal{S} = \mathcal{T}^d$ 의 generative process 는 **rate function** $u_t(y, x)$ 로 정의 — 시간 $t$, 상태 $x$ 에서 $y$ 로 점프할 instantaneous rate. Kolmogorov equation:
+
+$$\partial_t p_t(x) = \sum_y u_t(x, y) p_t(y)$$
+
+(Continuity equation 의 이산 버전.)
+
+**코드.** CTMC 그 자체를 위한 클래스는 없고, §7 의 Discrete FM 에서 이 framework 가 본격 사용됨.
+
+---
+
+## §7 Discrete Flow Matching
+
+### §7.2 Discrete probability paths
+
+**핵심.** 가장 단순한 mixture 보간 (per-coordinate, factorized):
+
+$$P(X_t^i = X_0^i) = \sigma_t, \qquad P(X_t^i = X_1^i) = 1 - \sigma_t$$
+
+각 좌표가 독립적으로 σ_t 확률로 source 값 유지, 1−σ_t 확률로 target 으로 점프. $\sigma_t$ 가 scheduler.
+
+**코드.** [`MixtureDiscreteProbPath`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/mixture.py#L19):
+
+```python
+from flow_matching.path import MixtureDiscreteProbPath
+from flow_matching.path.scheduler import PolynomialConvexScheduler
+
+path = MixtureDiscreteProbPath(scheduler=PolynomialConvexScheduler(n=1.0))
+sample = path.sample(x_0=x_0, x_1=x_1, t=t)
+# sample.x_t — Bernoulli flip 결과 (continuous 와 달리 dx_t 없음)
+```
+
+→ 논문 Code 9.
+
+### §7.4 Discrete Flow Matching loss
+
+**핵심.** CTMC velocity 학습용 loss. 자주 쓰이는 형태가 **Generalized KL** (x-prediction 모델 — logits 출력의 softmax 가 $p_{1|t}(x \mid x_t)$ 가 됨):
+
+$$\ell_i = -\frac{\dot\kappa_t}{1 - \kappa_t}\Big[p_{1|t}(x_t^i \mid x_t) - \delta_{x_1^i}(x_t^i) + (1 - \delta_{x_1^i}(x_t^i)) \log p_{1|t}(x_1^i \mid x_t)\Big]$$
+
+**코드.** [`MixturePathGeneralizedKL`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/loss/generalized_loss.py#L14):
+
+```python
+from flow_matching.loss import MixturePathGeneralizedKL
+loss_fn = MixturePathGeneralizedKL(path=path)
+
+logits = model(sample.x_t, sample.t)  # (batch, d, K)
+loss = loss_fn(logits, x_1=sample.x_1, x_t=sample.x_t, t=sample.t)
+```
+
+`flow_matching/loss/` 폴더에 있는 **유일한 loss 클래스**. continuous FM 의 loss 는 라이브러리에 없고 사용자가 MSE 직접 짜는 것과 대비.
+
+### §7.5 Factorized paths and velocities (CTMC simulation)
+
+**핵심.** Vocabulary $K$, sequence length $d$ 일 때 전체 state 수는 $K^d$ → rate matrix 가 $K^d \times K^d$ 라 비현실적. **좌표별 독립** 으로 factorize 하면 $K \times d$ 텐서면 충분. 좌표별 Euler step 으로 CTMC simulation:
+
+1. 모델로 $x_1 \sim p_{1|t}(\cdot \mid x_t)$ 샘플
+2. Conditional rate $u_t = (\dot\kappa_t / (1 - \kappa_t)) \cdot \delta_{x_1}$
+3. (선택) divergence-free 항 추가
+4. 좌표별 `mask_jump ~ Bernoulli(1 − exp(−h · intensity))`
+5. true 인 좌표만 새 값으로 jump
+
+**코드.** [`MixtureDiscreteEulerSolver`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/discrete_solver.py#L30) 의 `sample()` inner loop (line 194–242) 가 정확히 이 알고리즘:
+
+```python
+from flow_matching.solver import MixtureDiscreteEulerSolver
+
+solver = MixtureDiscreteEulerSolver(
+    model=model,                # x-prediction 모델 (logits 출력)
+    path=path,
+    vocabulary_size=K,
+    source_distribution_p=p,    # divergence-free term 쓸 때만 필요
+)
+samples = solver.sample(x_init=x_0, step_size=0.01, div_free=0.0)
+```
+
+→ 논문 Code 10 (Path + Loss + Solver 한 번에).
+
+---
+
+## §9 Generator Matching
+
+**핵심.** 모든 CTMP (flow, diffusion, jump 등) 를 통일된 framework 로 다룸. FM 은 generator 가 velocity 인 특수 case, diffusion 은 generator 가 (drift + diffusion coefficient) 인 case 로 봄. 새 modality 의 generative model 을 짤 때 어떤 "generator" 를 신경망으로 모델링할지 청사진을 줌.
+
+**코드.** 라이브러리는 GM 의 일반화 자체를 클래스로 제공하진 않음. 대신 각 sub-case (continuous FM, discrete FM, Riemannian FM) 에 특화된 path / solver 가 위 §들에 정리되어 있음. GM 의 일반 framework 자체는 paper 만 읽으면 됨.
+
+---
+
+## §10 Relation to Diffusion
+
+**핵심.** 기존 diffusion model (Song et al. 2021) 의 forward SDE 가 사실 FM 의 specific probability path 선택임. Time convention 만 뒤집고 ($r = k(t)$, diffusion 의 $r$ 은 noise 가 큰 쪽), affine drift SDE 인 경우 정확히 affine path 와 동치. 따라서:
+
+- DDPM 의 cosine schedule = `CosineScheduler`
+- DDPM 의 VP SDE = `VPScheduler` (with default $\beta_{\min}=0.1, \beta_{\max}=20$)
+- Score / noise / x₁ / v-prediction 들은 §4.8.1 의 parametrization 들과 1:1 대응
+
+**코드.** 학습된 DDPM 모델을 FM solver 로 sampling 도 가능 — `AffineProbPath` 의 변환 메서드로 noise prediction → velocity 변환만 하면 됨:
+
+```python
+from flow_matching.utils import ModelWrapper
+
+class NoisePredAsVelocity(ModelWrapper):
+    def __init__(self, ddpm_model, path):
+        super().__init__(ddpm_model)
+        self.path = path
+    def forward(self, x, t, **extras):
+        eps = self.model(x, t, **extras)
+        return self.path.epsilon_to_velocity(eps, x_t=x, t=t)
+
+# 이걸 ODESolver 에 그대로 넘기면 됨
 ```
 
 ---
 
-## 2. `flow_matching/path/scheduler/` — α_t, σ_t 의 시간 스케줄
+## 부록: 라이브러리 폴더 트리
 
-### `scheduler.py`
+```
+flow_matching/
+├── path/                              # §4, §5, §7 (Probability paths)
+│   ├── path.py                          ProbPath (abstract)
+│   ├── path_sample.py                   PathSample, DiscretePathSample
+│   ├── affine.py                        §4.7–§4.8 — AffineProbPath, CondOTProbPath
+│   ├── mixture.py                       §7.2 — MixtureDiscreteProbPath
+│   ├── geodesic.py                      §5.6 — GeodesicProbPath
+│   └── scheduler/
+│       ├── scheduler.py                 §4.8 — 5종 scheduler
+│       └── schedule_transform.py        post-training scheduler change
+├── solver/                            # §3, §5, §7 (ODE / CTMC simulation)
+│   ├── solver.py                        Solver (abstract)
+│   ├── ode_solver.py                    §3.6/§3.7 — ODESolver (+ compute_likelihood)
+│   ├── discrete_solver.py               §7.5 — MixtureDiscreteEulerSolver
+│   └── riemannian_ode_solver.py         §5 — RiemannianODESolver
+├── loss/                              # §7.4 (only discrete FM loss)
+│   └── generalized_loss.py              MixturePathGeneralizedKL
+└── utils/
+    ├── model_wrapper.py                 ModelWrapper (사용자 모델 래퍼)
+    ├── categorical_sampler.py           torch.multinomial wrapper
+    ├── utils.py                         broadcasting / autograd 헬퍼
+    └── manifolds/                     # §5 (Riemannian)
+        ├── manifold.py                  Manifold abstract, Euclidean
+        ├── sphere.py                    Sphere (unit hypersphere, 45줄)
+        ├── torus.py                     FlatTorus (28줄)
+        └── utils.py                     geodesic 헬퍼
+```
 
-[`SchedulerOutput` (scheduler.py:17)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L17) — 4 필드 (α_t, σ_t, α̇_t, σ̇_t) 묶음 dataclass.
-
-[`Scheduler` (scheduler.py:35)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L35) — 추상 베이스. `__call__(t)` 와 `snr_inverse(snr)` 추상.
-
-[`ConvexScheduler` (scheduler.py:63)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L63) — 볼록 path 용 추가 조건 (α_t + σ_t = 1 같은 경우). `kappa_inverse` 추상.
-
-**구체 구현 5종 (모두 §4.8 식 4.51 의 조건 α_0=σ_1=0, α_1=σ_0=1 만족):**
-
-| 클래스 (파일:라인) | α_t | σ_t | 의미 / 논문 대응 |
-| --- | --- | --- | --- |
-| [`CondOTScheduler` (104)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L104) | `t` | `1−t` | 조건부 OT (직선). **§4.7 Optimal Transport** |
-| [`PolynomialConvexScheduler` (119)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L119) | `t^n` | `1−t^n` | 일반화. Discrete FM 에서 자주 쓰임 (Code 9, 10). |
-| [`VPScheduler` (142)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L142) | `exp(-T/2)`, `T = ½(1−t)²(B−b) + (1−t)b` | `√(1 − exp(-T))` | **Variance Preserving SDE** (Song et al. 2021). **§10 Relation to Diffusion** 대응. `beta_min=0.1, beta_max=20.0` 기본값은 표준 DDPM. |
-| [`LinearVPScheduler` (171)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L171) | `t` | `√(1−t²)` | VP 단순화. **Code 5** 에 직접 등장. |
-| [`CosineScheduler` (186)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L186) | `sin(πt/2)` | `cos(πt/2)` | Nichol & Dhariwal 2021 의 cosine schedule. **Code 5**. |
-
-### `schedule_transform.py`
-
-[`ScheduleTransformedModel` (schedule_transform.py:13)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/schedule_transform.py#L13)
-
-- `ModelWrapper` 의 wrapper. 학습은 scheduler A 로 했는데 샘플링은 scheduler B 로 하고 싶을 때 (post-training scheduler change). 내부적으로 **scale-time (ST) transformation** `bar{X}_r = s_r X_{t_r}` 적용.
-- **논문 대응:** **§4.8 Affine conditional flows** 의 ST transformation. docstring 안에 변환 공식 `ū_r(x) = (ṡ_r/s_r)·x + s_r·ṫ_r·u_{t_r}(x/s_r)` 가 그대로 있음.
-- **Code 7** 이 이 클래스 사용 예제.
-
----
-
-## 3. `flow_matching/solver/` — 학습된 모델로 샘플 뽑기
-
-### `solver.py`
-
-[`Solver` (solver.py:12)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/solver.py#L12) — 추상. `sample()` 만 강제.
-
-### `ode_solver.py` — 연속 FM 샘플링 + 우도
-
-[`ODESolver` (ode_solver.py:17)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/ode_solver.py#L17)
-
-- **`sample()` (ode_solver.py:30)** — `torchdiffeq.odeint` 위에 얹은 얇은 wrapper. `method=` 로 `"euler"`, `"midpoint"`, `"heun3"`, `"dopri5"` (adaptive) 등 선택. **Code 2** 가 사용 예제.
-- **`compute_likelihood()` (ode_solver.py:106)** — CNF 우도. ODE 역방향으로 풀면서 divergence 누적. `exact_divergence=False` 면 **Hutchinson 추정량** (`(z⊗z) : ∂_x u_t` 의 unbiased estimator), `True` 면 좌표마다 도함수 다 계산. **Code 3** 이 사용 예제.
-- **논문 대응:** **§3.6 Instantaneous Change of Variables** (식 3.16 부근의 `d log p_t / dt = -div(u_t)`), **§3.7 Training flow models with simulation** (classical CNF maximum likelihood).
-
-### `discrete_solver.py` — Discrete FM 샘플링 (CTMC simulation)
-
-[`MixtureDiscreteEulerSolver` (discrete_solver.py:30)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/discrete_solver.py#L30)
-
-- CTMC Euler 시뮬레이터. `sample()` 의 내부 루프 (discrete_solver.py:194–242) 가 다음 알고리즘을 그대로 구현:
-  1. `p_1t = model(x_t, t)` (x-prediction 모델 호출)
-  2. `x_1 ~ categorical(p_1t)` (다음 step 의 타깃 후보)
-  3. `u_t = (d_κ_t / (1 − κ_t)) · δ_{x_1}` (조건부 속도)
-  4. (선택) `c_div_free` 가중치로 divergence-free 항 추가
-  5. 각 좌표에 대해 `mask_jump ~ Bernoulli(1 − exp(-h · intensity))`, true 면 `x_t[i] ~ categorical(u/intensity)`
-- **논문 대응:** docstring (discrete_solver.py:31–62) 에 그 알고리즘이 그대로 나옴. **§6.3 Kolmogorov Equation**, **§7.4 식 (7.4)**, **§7.5.1 Simulating CTMC with factorized velocities**. **Code 10** 사용 예제.
-- Divergence-free 항: **§7.5** 의 c_div_free 파라미터.
-
-### `riemannian_ode_solver.py` — Riemannian Euler / Midpoint / RK4
-
-[`RiemannianODESolver` (riemannian_ode_solver.py:25)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/riemannian_ode_solver.py#L25)
-
-- 매니폴드 위에서 ODE 풀기. `sample(method="euler"|"midpoint"|"rk4")`.
-- 핵심 트릭: 각 step 마다 (1) 속도를 `manifold.proju` 로 접평면 (tangent plane) 에 투영, (2) 위치를 `manifold.projx` 로 매니폴드로 다시 투영.
-  - [`_euler_step` (riemannian_ode_solver.py:155)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/riemannian_ode_solver.py#L155)
-  - [`_midpoint_step` (190)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/riemannian_ode_solver.py#L190)
-  - [`_rk4_step` (228)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/riemannian_ode_solver.py#L228)
-- **논문 대응:** **§5 Non-Euclidean FM** 의 샘플링 부분. Code 8 가 Sphere 예제이지만 그 안에서 이 solver 가 쓰임.
-
-### `solver/utils.py`
-
-[`get_nearest_times` (utils.py:11)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/utils.py#L11) — `return_intermediates=True` 일 때 임의 `time_grid` 와 균일 `t_discretization` 정렬용. 작은 헬퍼.
-
----
-
-## 4. `flow_matching/loss/` — 손실 함수
-
-> ⚠️ 중요: 이 폴더에는 클래스가 **단 하나** 있습니다. 연속 FM 의 손실 (§4.5 CFM, §5.5 RCFM) 은 라이브러리가 따로 제공하지 않고 **사용자 코드에서 `torch.nn.MSELoss` 같은 걸로 직접 계산**합니다 (Code 4, 6, 8 참조).
-
-[`MixturePathGeneralizedKL` (generalized_loss.py:14)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/loss/generalized_loss.py#L14)
-
-- Discrete FM 의 일반화 KL 손실. x-prediction 모델 (logits 출력, softmax 가 `p_{1|t}(x|x_t)` 가 되도록) 을 학습.
-- **수식 (docstring, generalized_loss.py:20–21):**
-  ```
-  ℓ_i(x_1, x_t, t) = −κ̇_t/(1−κ_t) · [ p_{1|t}(x_t^i|x_t) − δ_{x_1^i}(x_t^i)
-                       + (1 − δ_{x_1^i}(x_t^i)) · log p_{1|t}(x_1^i|x_t) ]
-  ```
-- **논문 대응:** **§7.4 Discrete Flow Matching loss (식 7.4)** + **§7.5** 의 factorized 버전. Bregman divergence 중 KL 을 채택한 case. **Code 10** 가 사용 예제.
-
----
-
-## 5. `flow_matching/utils/`
-
-### `utils.py`
-
-| 함수 (라인) | 용도 |
-| --- | --- |
-| [`unsqueeze_to_match` (13)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/utils.py#L13) | source 텐서를 target 차원에 맞게 `unsqueeze`. broadcasting 도우미. |
-| [`expand_tensor_like` (41)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/utils.py#L41) | 1D 벡터 (batch_size,) 를 (batch_size, ...) 로 expand. `α_t * x_1` 같은 표현에서 broadcasting 위해 필수. `AffineProbPath.sample` 내부 (affine.py:75–86) 에서 호출. |
-| [`gradient` (65)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/utils.py#L65) | `torch.autograd.grad` wrapper. `ODESolver.compute_likelihood` 의 divergence 계산용. |
-
-### `model_wrapper.py`
-
-[`ModelWrapper` (model_wrapper.py:12)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/model_wrapper.py#L12)
-
-- 사용자가 짠 `nn.Module` 을 감싸서 `forward(x, t, **extras)` 시그니처를 강제하는 추상 클래스. Solver 들이 이 시그니처를 기대.
-- text/image 예제처럼 condition 이 들어가는 경우 `**extras` 로 받음.
-
-### `categorical_sampler.py`
-
-[`categorical(probs)` (categorical_sampler.py:11)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/categorical_sampler.py#L11) — `torch.multinomial` 1줄 wrapper. `MixtureDiscreteEulerSolver.sample` 안에서 ` x_1 ~ p_{1|t}` 뽑을 때 사용.
-
-### `utils/manifolds/`
-
-| 파일 / 클래스 (라인) | 정의 | 비고 |
-| --- | --- | --- |
-| [`Manifold` (manifold.py:13)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/manifold.py#L13) | 추상 — `expmap`, `logmap`, `projx`, `proju` 4 메서드 강제. | 매니폴드의 미분기하 4기본기 |
-| [`Euclidean` (manifold.py:80)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/manifold.py#L80) | 자명 (expmap=`x+u`, logmap=`y−x`, project=identity) | sanity check 용 |
-| [`Sphere` (sphere.py:13)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/sphere.py#L13) | 단위 hypersphere. `expmap` 은 cos/sin 조합 (sphere.py:18–24). `projx` = L2 정규화. | `2d_riemannian_flow_matching_sphere.ipynb` + Code 8 |
-| [`FlatTorus` (torus.py:15)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/torus.py#L15) | [0, 2π]^D 평탄 토러스. expmap = `(x+u) mod 2π`. | `2d_riemannian_flow_matching_flat_torus.ipynb` |
-| [`geodesic(manifold, x0, x1)` (utils.py:15)](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/utils.py#L15) | 측지선을 시간 t 의 함수로 반환. `GeodesicProbPath.sample` 과 `RiemannianODESolver.interp` 에서 사용. | |
-
----
-
-## 6. 그래서 어떤 식으로 학습 도구로 쓸 수 있나 (검증된 권장)
-
-여기까지 라이브러리 전 파일을 읽고 보니, 학습용으로 가장 가치 있는 흐름은 다음과 같다고 봅니다.
-
-### A. "노트북 따라가다가 막힐 때" 펼쳐볼 파일
-
-| 노트북 / 챕터 막히는 지점 | 펼쳐볼 라이브러리 파일 |
-| --- | --- |
-| `2d_flow_matching.ipynb` 에서 `path.sample(...)` 이 정확히 뭘 하는지 (§4.8 식 4.50 의 코드화) | [`path/affine.py:57–92`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/affine.py#L57) |
-| 노트북에서 MSE loss 를 그냥 `(model_out - dx_t)**2` 로 쓰는데 왜 그게 §4.5 의 CFM loss 인가 | 라이브러리에 없음. **§4.5 식 4.22–4.23** 의 Bregman divergence + **Code 4** 와 비교. (이 경우 코드 보지 말고 paper 봐야 함) |
-| `2d_cnf_maximum_likelihood.ipynb` 에서 `solver.compute_likelihood(...)` 가 어떻게 우도를 구하나 (§3.6 식 3.16 + §3.7) | [`solver/ode_solver.py:106–203`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/ode_solver.py#L106). Hutchinson estimator 부분 특히. |
-| Riemannian 노트북에서 sphere 위로 점 / 속도 투영이 어떻게? | [`utils/manifolds/sphere.py`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/sphere.py) 45줄짜리, 다 읽어도 1분 |
-| `2d_discrete_flow_matching.ipynb` 의 CTMC 샘플링 jump 가 §7.5.1 의 어느 식인가 | [`solver/discrete_solver.py:194–242`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/discrete_solver.py#L194) |
-| `MixturePathGeneralizedKL` loss 가 §7.4 식 (7.4) 와 정확히 어떻게 대응 | [`loss/generalized_loss.py:34–80`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/loss/generalized_loss.py#L34). docstring 안에 수식이 그대로 있어서 식과 코드 한 번에 비교 가능. |
-| Cosine / VP scheduler 의 α_t, σ_t 정의 (§10 diffusion 과의 관계) | [`path/scheduler/scheduler.py:104–199`](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py#L104) |
-
-### B. "본인이 새 것을 만들고 싶을 때" 베껴 시작할 베이스
-
-| 만들고 싶은 것 | 베이스 클래스 / 파일 |
-| --- | --- |
-| 새 probability path (커스텀 보간) | `ProbPath` 상속 ([path/path.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/path.py)). `AffineProbPath` 가 가장 단순한 구현 예. |
-| 새 scheduler (커스텀 α_t, σ_t) | `Scheduler` 또는 `ConvexScheduler` 상속. 기존 5종이 모두 좋은 예시 (`scheduler.py:104–199`). |
-| 새 매니폴드 (예: 직사각형 hyperbolic) | `Manifold` 상속. `Sphere` (45줄) / `FlatTorus` (28줄) 가 깔끔한 참고. |
-| 새 solver (예: adaptive step Riemannian) | `Solver` 상속. `ODESolver` / `RiemannianODESolver` 비교하면 패턴 보임. |
-
-### C. "안 봐도 되는 것" (적어도 학습 단계에서는)
-
-- `utils/utils.py` 의 `unsqueeze_to_match`, `expand_tensor_like` — 그냥 broadcasting 헬퍼. 한 줄로 이해 끝.
-- `solver/utils.py` — `get_nearest_times` 하나뿐. tiny.
-- `utils/categorical_sampler.py` — `torch.multinomial` 한 줄 wrapper.
-
-### D. 사실 라이브러리 본체는 **굳이 레포에 안 가져와도 됨**
-
-노트북은 `pip install flow_matching` (PyPI 패키지명) 으로 설치된 패키지를 import 해서 쓰는 구조라, 학습 시점에 위 표의 해당 파일을 GitHub 에서 클릭해서 그때그때 보면 됩니다. 모든 링크는 위에 라인 번호까지 박혀 있어요.
-
----
-
-## 7. 라이브러리 전체 통계
-
-- 총 27개 `.py` 파일, 2267 줄.
-- 가장 긴 파일: `path/affine.py` (260), `solver/discrete_solver.py` (260), `solver/riemannian_ode_solver.py` (261), `path/scheduler/scheduler.py` (199).
-- 가장 짧은 파일: `flow_matching/__init__.py` (7), `solver/solver.py` (17), `utils/__init__.py` (17), `solver/utils.py` (19).
-- 외부 의존성: `torch`, `torchdiffeq` (`ODESolver` 가 의존). 그외 표준 라이브러리.
-
-원본 레포: <https://github.com/facebookresearch/flow_matching> (라이선스: CC BY-NC 4.0)
+폴더가 곧 챕터 그룹. 막힐 때 위 트리에서 챕터 라벨 보고 해당 파일로 점프.

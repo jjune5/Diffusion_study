@@ -40,50 +40,39 @@
 
 ---
 
-## 현재 공개된 코드 — 검증된 챕터 매핑
+## 챕터별 정리
 
-각 노트북의 모든 markdown 셀과 코드 셀의 첫 줄을 직접 읽고, 책 PDF (arXiv:2510.21890) 의 해당 섹션과 대조해서 만든 매핑입니다.
+### [`ch05_flow_matching_baseline/diffusion_tutorial.ipynb`](./ch05_flow_matching_baseline) — §5.2 + §9
 
-### 1. [`ch05_flow_matching_baseline/diffusion_tutorial.ipynb`](./ch05_flow_matching_baseline)
+**§5.2 Flow Matching Framework.** Source $p_\text{src}$ (Gaussian) 와 target $p_\text{tgt}$ (데이터) 사이를 잇는 probability path 위에서 velocity field $v_\theta(x_s, s)$ 를 회귀학습. 표준 linear interpolation:
 
-**대응 섹션:** **§5.2 Flow Matching Framework** (학습) + **§9 Sophisticated Solvers** (Euler vs Heun 비교)
+$$x_s = (1-s)\,x_0 + s\,\epsilon, \qquad \mathcal{L}_\text{CFM} = \big\|v_\theta(x_s,s) - (\epsilon - x_0)\big\|^2$$
 
-- 노트북 cell 0 의 제목: "**Diffusion Model (Flow Matching) Tutorial** on 2D Two Moons"
-- Forward process: `x_s = (1−s)·x_0 + s·ε` — §5.2 / §5.3 의 표준 linear interp
-- Loss: `‖v_θ(x_s,s) − (ε−x_0)‖²` — §5.2 의 **Conditional Flow Matching (CFM) loss**
-- Sampling: Euler (1st-order) + Heun's (2nd-order) ODE solver 비교 — §9 의 "fast sampling" 주제와 연결
-- 노트북 자체 코멘트 (cell 7): "*Despite its simplicity, the marginal velocity ... induces curved ODE trajectories (see Ch. 11 Fig. 2), which is why multi-step ODE solvers are needed*" → **Ch 11 의 baseline** 역할
+**§9 Sophisticated Solvers.** 학습된 marginal velocity field 가 만든 ODE trajectory 는 curved 이므로 단순 Euler 보다 2차 solver 가 적은 NFE 로 같은 품질 달성. Heun's method (predictor + corrector) 가 대표적.
 
-> ⚠️ **수정 기록**: 처음에는 폴더명을 `ch02_04_ddpm_score_sde` 로 두고 DDPM/Score-SDE 튜토리얼이라고 적었으나, 노트북을 실제로 읽어보니 DDPM/NCSN/Score SDE 코드는 전혀 없고 순수 Flow Matching 구현입니다. 폴더명을 `ch05_flow_matching_baseline` 로 변경했고, 매핑을 §5.2 로 정정했습니다.
+**노트북에서 다루는 것.** 2D Two Moons 데이터에 위 CFM loss 로 baseline diffusion model 학습 → 같은 모델을 Euler 와 Heun's 두 solver 로 sampling 해서 NFE 별 품질 비교. Ch 11 의 flow map 모델들이 shortcut 하려는 "그 ODE 자체" 가 무엇인지를 보여주는 baseline 역할.
 
-### 2. [`ch05_rectified_flow/rectified_flow_tutorial.ipynb`](./ch05_rectified_flow)
+### [`ch05_rectified_flow/rectified_flow_tutorial.ipynb`](./ch05_rectified_flow) — §5.4 + §5.3
 
-**대응 섹션:** **§5.4 (Optional) Properties of the Canonical Affine Flow** — 특히 **§5.4.1 Rectifying Flows** + **§5.4.2 Reflow** + **§5.4.3 Properties of Reflow**. 부수적으로 **§5.3 Constructing Probability Paths** (scheduler 비교).
+**§5.4 Properties of the Canonical Affine Flow.** Affine path $x_t = \alpha_t x_0 + \sigma_t x_1$ 의 특수한 성질들. 두 핵심 절차:
 
-- 노트북 cell 0 제목: "Rectified Flow with Different Schedulers (PyTorch)"
-- Scheduler 비교: **Linear** (FM, α_t=1-t, σ_t=t) vs **VP-Trig** (DDPM cosine, α=cos(πt/2), σ=sin(πt/2)) — §5.3 의 affine path
-- Cell 25 "Reflow under each scheduler" — §5.4.2 Reflow 의 코드화
-- Cell 31 핵심 결론: "**Reflow is a coupling-deterministicizer, not a path straightener.**" — §5.4.3 Properties of Reflow 의 핵심 메시지와 일치
-- 원 논문: Liu, Gong et al. 2022 (Rectified Flow). 책에서는 §5.4.1 의 인용으로 등장
+- **§5.4.1 Rectifying Flows.** 학습된 ODE 의 입출력 페어 $(z_0, z_1 = \Phi(z_0))$ 를 새 데이터 쌍으로 삼아 다시 학습 — coupling ambiguity 제거.
+- **§5.4.2 Reflow.** 위 과정을 반복. Linear FM 처럼 conditional path 가 직선인 경우에만 trajectory 가 직선으로 수렴.
+- **§5.4.3.** 핵심 통찰: "Reflow 는 coupling 을 deterministic 하게 만드는 것이지, path 자체를 곧게 펴는 것이 아니다." 곡선 scheduler 에서는 reflow 가 오히려 trajectory 를 더 휘게 만들 수 있음.
 
-### 3. [`ch11_flow_map/flow_map_tutorial.ipynb`](./ch11_flow_map)
+**노트북에서 다루는 것.** 8-mode Gaussian → 8-mode Gaussian transport. **Linear** (FM, $\alpha_t = 1-t$, $\sigma_t = t$) 와 **VP-Trig** (DDPM cosine, $\alpha = \cos(\pi t/2)$, $\sigma = \sin(\pi t/2)$) 두 scheduler 로 같은 데이터 학습. Reflow 를 1, 2, 3 stage 반복하면서 trajectory 의 straightness 변화를 정량 비교 — Linear 는 단조증가, VP-Trig 는 감소.
 
-**대응 섹션:** **§11.2 (CM), §11.4 (CTM), §11.5 (MeanFlow)** — 노트북 cell 0 의 헤더 표에서 책의 § 번호를 직접 인용함.
+### [`ch11_flow_map/flow_map_tutorial.ipynb`](./ch11_flow_map) — §11.2 + §11.4 + §11.5
 
-노트북 cell 0 표 (원문 그대로):
+**Ch 11 Learning Fast Generators from Scratch.** Baseline diffusion (위 §5.2) 의 ODE 를 통째로 시뮬레이션하는 대신, **flow map** $\Psi_{s \to t}$ 자체를 직접 학습해서 1-step / few-step generation 가능하게 만드는 모델들.
 
-| Model | Network | Approx. target | Section |
+| 절 | 모델 | 네트워크 | 학습 타깃 |
 | --- | --- | --- | --- |
-| **CM** | f_θ(x_s, s) | x_0 | **§11.2** |
-| **CTM** (v-pred) | G_θ(x_s, s, t) | Ψ_{s→t}(x_s) | **§11.4** |
-| **MF** | h_θ(x_s, s, t) | average drift h* | **§11.5** |
+| §11.2 | **Consistency Model (CM)** | $f_\theta(x_s, s)$ | $x_0$ (clean data) |
+| §11.4 | **Consistency Trajectory Model (CTM)** | $G_\theta(x_s, s, t)$ | $\Psi_{s \to t}(x_s)$ (임의 $t \le s$ 로 점프) |
+| §11.5 | **Mean Flow (MF)** | $h_\theta(x_s, s, t)$ | 구간 평균 drift $h^* = \frac{1}{t-s}\int_s^t v^*(x_u, u)\, du$ |
 
-- §11.2 Consistency Model (CM) discrete time — cell 7
-- §11.4 Consistency Trajectory Model (CTM) — cell 9 (v-prediction parameterization)
-- §11.5 Mean Flow (MF) — cell 11 (MeanFlow Identity)
-- γ-sampling unified sampler — cell 13
-
-이 노트북은 baseline 으로 `ch05_flow_matching_baseline/diffusion_tutorial.ipynb` 를 참조한다고 명시 ("**Companion to the Flow Map Tutorial — same dataset, same network, same conventions**"). 두 노트북을 순서대로 보면 "diffusion baseline → flow map shortcut" 흐름이 명확해짐.
+**노트북에서 다루는 것.** 같은 2D Two Moons 데이터 + 같은 네트워크 backbone 으로 위 세 모델을 학습/비교. 1-step generation, multi-step (CM 은 $\gamma=1$ 만 가능, CTM/MF 는 임의 $\gamma$), γ-sampling sweep. Baseline 으로 [`ch05_flow_matching_baseline/diffusion_tutorial.ipynb`](./ch05_flow_matching_baseline) 와 동일한 forward process 사용 ("same dataset, same network, same conventions") — 두 노트북을 순서대로 보면 "baseline diffusion ODE → flow map 으로 shortcut" 흐름이 자연스러움.
 
 ---
 
