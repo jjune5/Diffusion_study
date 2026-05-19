@@ -84,5 +84,6 @@
 | --- | --- | --- |
 | `image/` | **§4 Flow Matching** (continuous) + **§6–§7 Discrete FM** | CIFAR10, face-blurred ImageNet 학습 (continuous + discrete). 분산 학습(`submitit_train.py`), UNet / Discrete-UNet, EMA, EDM time discretization 포함 |
 | `text/` | **§7 Discrete Flow Matching** | 대규모 discrete FM 언어 모델 학습. Transformer + RoPE, scalable training pipeline |
-| `ORIGINAL_EXAMPLES_README.md` | — | 원본 `examples/README.md` 복사본 |
+
+> 폴더별 상세 (학습 명령, 결과 표, 라이선스 등) 는 각 하위 폴더의 `README.md` (한글 번역본) 참고: [`04_scaling_examples/README.md`](./04_scaling_examples/README.md), [`image/README.md`](./04_scaling_examples/image/README.md), [`text/README.md`](./04_scaling_examples/text/README.md).
 
