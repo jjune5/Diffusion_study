@@ -5,8 +5,6 @@
 
 원본 코드 저장소: <https://github.com/facebookresearch/flow_matching>
 
-> 📘 **`flow_matching` 라이브러리 본체 (loss/, path/, solver/, utils/) 의 모든 클래스/함수 ↔ 논문 § / 식 / Code N 매핑**: [`LIBRARY_REFERENCE.md`](./LIBRARY_REFERENCE.md) — 라이브러리 27개 파일을 직접 읽고 논문과 1:1 대조해서 만든 검증된 reference.
-
 ---
 
 ## 논문 전체 목차
