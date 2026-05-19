@@ -355,35 +355,64 @@ class NoisePredAsVelocity(ModelWrapper):
 
 ---
 
-## 부록: 라이브러리 폴더 트리
+## 부록: upstream `flow_matching` 패키지 구조
+
+> **참고:** 아래 트리는 **현재 레포에 미러된 게 아니라** [facebookresearch/flow_matching](https://github.com/facebookresearch/flow_matching/tree/main/flow_matching) 의 라이브러리 패키지 구조입니다. `pip install flow_matching` 시 깔리는 코드 — 학습용으로 한 번 펼쳐서 보고 싶을 때 아래 링크들을 클릭하면 GitHub 의 해당 파일이 열려요.
 
 ```
 flow_matching/
-├── path/                              # §4, §5, §7 (Probability paths)
-│   ├── path.py                          ProbPath (abstract)
-│   ├── path_sample.py                   PathSample, DiscretePathSample
-│   ├── affine.py                        §4.7–§4.8 — AffineProbPath, CondOTProbPath
-│   ├── mixture.py                       §7.2 — MixtureDiscreteProbPath
-│   ├── geodesic.py                      §5.6 — GeodesicProbPath
+├── path/                                  §4, §5, §7 (Probability paths)
+│   ├── path.py                              ProbPath (abstract)
+│   ├── path_sample.py                       PathSample, DiscretePathSample
+│   ├── affine.py                            §4.7–§4.8  AffineProbPath, CondOTProbPath
+│   ├── mixture.py                           §7.2       MixtureDiscreteProbPath
+│   ├── geodesic.py                          §5.6       GeodesicProbPath
 │   └── scheduler/
-│       ├── scheduler.py                 §4.8 — 5종 scheduler
-│       └── schedule_transform.py        post-training scheduler change
-├── solver/                            # §3, §5, §7 (ODE / CTMC simulation)
-│   ├── solver.py                        Solver (abstract)
-│   ├── ode_solver.py                    §3.6/§3.7 — ODESolver (+ compute_likelihood)
-│   ├── discrete_solver.py               §7.5 — MixtureDiscreteEulerSolver
-│   └── riemannian_ode_solver.py         §5 — RiemannianODESolver
-├── loss/                              # §7.4 (only discrete FM loss)
-│   └── generalized_loss.py              MixturePathGeneralizedKL
+│       ├── scheduler.py                     §4.8       5종 scheduler
+│       └── schedule_transform.py            §4.8       post-training scheduler change
+├── solver/                                §3, §5, §7 (ODE / CTMC simulation)
+│   ├── solver.py                            Solver (abstract)
+│   ├── ode_solver.py                        §3.6 §3.7  ODESolver (+ compute_likelihood)
+│   ├── discrete_solver.py                   §7.5       MixtureDiscreteEulerSolver
+│   └── riemannian_ode_solver.py             §5         RiemannianODESolver
+├── loss/                                  §7.4 (only discrete FM loss)
+│   └── generalized_loss.py                  §7.4       MixturePathGeneralizedKL
 └── utils/
-    ├── model_wrapper.py                 ModelWrapper (사용자 모델 래퍼)
-    ├── categorical_sampler.py           torch.multinomial wrapper
-    ├── utils.py                         broadcasting / autograd 헬퍼
-    └── manifolds/                     # §5 (Riemannian)
-        ├── manifold.py                  Manifold abstract, Euclidean
-        ├── sphere.py                    Sphere (unit hypersphere, 45줄)
-        ├── torus.py                     FlatTorus (28줄)
-        └── utils.py                     geodesic 헬퍼
+    ├── model_wrapper.py                     ModelWrapper (사용자 모델 래퍼)
+    ├── categorical_sampler.py               torch.multinomial wrapper
+    ├── utils.py                             broadcasting / autograd 헬퍼
+    └── manifolds/                         §5 (Riemannian)
+        ├── manifold.py                      §5         Manifold abstract, Euclidean
+        ├── sphere.py                        §5         Sphere (unit hypersphere, 45줄)
+        ├── torus.py                         §5         FlatTorus (28줄)
+        └── utils.py                         §5         geodesic 헬퍼
 ```
 
-폴더가 곧 챕터 그룹. 막힐 때 위 트리에서 챕터 라벨 보고 해당 파일로 점프.
+위 파일들의 GitHub 링크 (클릭하면 해당 파일):
+- path: [path.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/path.py) · [path_sample.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/path_sample.py) · [affine.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/affine.py) · [mixture.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/mixture.py) · [geodesic.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/geodesic.py)
+- scheduler: [scheduler.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/scheduler.py) · [schedule_transform.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/path/scheduler/schedule_transform.py)
+- solver: [solver.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/solver.py) · [ode_solver.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/ode_solver.py) · [discrete_solver.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/discrete_solver.py) · [riemannian_ode_solver.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/solver/riemannian_ode_solver.py)
+- loss: [generalized_loss.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/loss/generalized_loss.py)
+- utils: [model_wrapper.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/model_wrapper.py) · [categorical_sampler.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/categorical_sampler.py) · [utils.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/utils.py)
+- manifolds: [manifold.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/manifold.py) · [sphere.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/sphere.py) · [torus.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/torus.py) · [utils.py](https://github.com/facebookresearch/flow_matching/blob/main/flow_matching/utils/manifolds/utils.py)
+
+---
+
+## 참고: 현재 이 레포의 폴더 구조
+
+위 라이브러리는 미러 안 했고, 현재 `Flow Matching Guide and Code/` 안의 실제 구조는:
+
+```
+Flow Matching Guide and Code/
+├── README.md
+├── LIBRARY_REFERENCE.md             (이 파일)
+├── 01_continuous_fm/                튜토리얼 노트북 3
+├── 02_discrete_fm/                  튜토리얼 노트북 2
+├── 03_riemannian_fm/                튜토리얼 노트북 2
+└── 04_scaling_examples/
+    ├── README.md
+    ├── image/                       CIFAR10 / ImageNet 학습 코드 (전체)
+    └── text/                        텍스트 discrete FM 학습 코드 (전체)
+```
+
+`04_scaling_examples/image/` 와 `04_scaling_examples/text/` 안에는 `flow_matching` 라이브러리를 import 해서 쓰는 학습 코드만 미러되어 있고, 라이브러리 본체는 위 부록 트리의 GitHub 링크로 펼쳐 봐야 합니다.
